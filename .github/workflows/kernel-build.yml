@@ -7,14 +7,10 @@ on:
         description: "Defconfig to build"
         required: true
         default: "a71_defconfig"
-      toolchain_repo:
-        description: "Clang toolchain repo"
+      clang_rev:
+        description: "AOSP clang prebuilt revision"
         required: true
-        default: "https://github.com/kdrag0n/proton-clang"
-      toolchain_branch:
-        description: "Clang toolchain branch"
-        required: true
-        default: "master"
+        default: "clang-r383902"
       anykernel_repo:
         description: "AnyKernel3 repo"
         required: true
@@ -27,10 +23,6 @@ on:
         description: "Base output zip name"
         required: true
         default: "a71-kernel"
-      release:
-        description: "Create GitHub release"
-        required: true
-        default: "false"
   push:
     tags:
       - "v*"
@@ -41,29 +33,29 @@ jobs:
     env:
       ARCH: arm64
       DEFCONFIG: ${{ github.event.inputs.defconfig || 'a71_defconfig' }}
-      TOOLCHAIN_REPO: ${{ github.event.inputs.toolchain_repo || 'https://github.com/kdrag0n/proton-clang' }}
-      TOOLCHAIN_BRANCH: ${{ github.event.inputs.toolchain_branch || 'master' }}
+      CLANG_REV: ${{ github.event.inputs.clang_rev || 'clang-r383902' }}
       ANYKERNEL_REPO: ${{ github.event.inputs.anykernel_repo || 'https://github.com/osm0sis/AnyKernel3' }}
       ANYKERNEL_BRANCH: ${{ github.event.inputs.anykernel_branch || 'master' }}
       ZIP_NAME: ${{ github.event.inputs.zip_name || 'a71-kernel' }}
-      RELEASE: ${{ github.event.inputs.release || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev build-essential git zip curl python3
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev build-essential git zip curl python3 \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-      - name: Clone clang toolchain
+      - name: Clone AOSP clang prebuilt
         run: |
-          git clone --depth 1 --branch "${TOOLCHAIN_BRANCH}" "${TOOLCHAIN_REPO}" toolchain
-          echo "${GITHUB_WORKSPACE}/toolchain/bin" >> $GITHUB_PATH
+          git clone --depth 1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts-clang
+          echo "${GITHUB_WORKSPACE}/prebuilts-clang/${CLANG_REV}/bin" >> $GITHUB_PATH
 
       - name: Build kernel
         run: |
           make O=out ARCH=${ARCH} ${DEFCONFIG}
-          make -j"$(nproc)" O=out ARCH=${ARCH} CC=clang LLVM=1 LLVM_IAS=1
+          make -j"$(nproc)" O=out ARCH=${ARCH} CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
       - name: Package AnyKernel3
         run: |
@@ -100,8 +92,3 @@ jobs:
           name: anykernel3-zip
           path: "${{ env.ZIP_NAME }}-*.zip"
 
-      - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/') || env.RELEASE == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: "${{ env.ZIP_NAME }}-*.zip"
