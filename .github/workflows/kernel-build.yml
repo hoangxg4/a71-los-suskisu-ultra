@@ -1,58 +1,107 @@
-name: Android Kernel Build
+name: AnyKernel3 Build
 
 on:
   workflow_dispatch:
     inputs:
-      arch:
-        description: "Target arch"
+      defconfig:
+        description: "Defconfig to build"
         required: true
-        default: "aarch64"
-      tag:
-        description: "Android GKI tag"
+        default: "a71_defconfig"
+      toolchain_repo:
+        description: "Clang toolchain repo"
         required: true
-        default: "android13-5.15"
+        default: "https://github.com/kdrag0n/proton-clang"
+      toolchain_branch:
+        description: "Clang toolchain branch"
+        required: true
+        default: "master"
+      anykernel_repo:
+        description: "AnyKernel3 repo"
+        required: true
+        default: "https://github.com/osm0sis/AnyKernel3"
+      anykernel_branch:
+        description: "AnyKernel3 branch"
+        required: true
+        default: "master"
+      zip_name:
+        description: "Base output zip name"
+        required: true
+        default: "a71-kernel"
+      release:
+        description: "Create GitHub release"
+        required: true
+        default: "false"
   push:
     tags:
       - "v*"
 
 jobs:
-  prepare-module:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      ARCH: arm64
+      DEFCONFIG: ${{ github.event.inputs.defconfig || 'a71_defconfig' }}
+      TOOLCHAIN_REPO: ${{ github.event.inputs.toolchain_repo || 'https://github.com/kdrag0n/proton-clang' }}
+      TOOLCHAIN_BRANCH: ${{ github.event.inputs.toolchain_branch || 'master' }}
+      ANYKERNEL_REPO: ${{ github.event.inputs.anykernel_repo || 'https://github.com/osm0sis/AnyKernel3' }}
+      ANYKERNEL_BRANCH: ${{ github.event.inputs.anykernel_branch || 'master' }}
+      ZIP_NAME: ${{ github.event.inputs.zip_name || 'a71-kernel' }}
+      RELEASE: ${{ github.event.inputs.release || 'false' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Upload dummy module source
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev build-essential git zip curl python3
+
+      - name: Clone clang toolchain
+        run: |
+          git clone --depth 1 --branch "${TOOLCHAIN_BRANCH}" "${TOOLCHAIN_REPO}" toolchain
+          echo "${GITHUB_WORKSPACE}/toolchain/bin" >> $GITHUB_PATH
+
+      - name: Build kernel
+        run: |
+          make O=out ARCH=${ARCH} ${DEFCONFIG}
+          make -j"$(nproc)" O=out ARCH=${ARCH} CC=clang LLVM=1 LLVM_IAS=1
+
+      - name: Package AnyKernel3
+        run: |
+          set -e
+          git clone --depth 1 --branch "${ANYKERNEL_BRANCH}" "${ANYKERNEL_REPO}" AnyKernel3
+          KERNEL_DIR="${GITHUB_WORKSPACE}/out/arch/arm64/boot"
+          if [ -f "${KERNEL_DIR}/Image.gz-dtb" ]; then
+            cp "${KERNEL_DIR}/Image.gz-dtb" AnyKernel3/
+          elif [ -f "${KERNEL_DIR}/Image.gz" ]; then
+            cp "${KERNEL_DIR}/Image.gz" AnyKernel3/
+          elif [ -f "${KERNEL_DIR}/Image" ]; then
+            cp "${KERNEL_DIR}/Image" AnyKernel3/
+          else
+            echo "No kernel Image found" >&2
+            exit 1
+          fi
+          if [ -f "${KERNEL_DIR}/dtbo.img" ]; then
+            cp "${KERNEL_DIR}/dtbo.img" AnyKernel3/
+          fi
+          if ls "${KERNEL_DIR}"/dts/*.dtb >/dev/null 2>&1; then
+            cp "${KERNEL_DIR}"/dts/*.dtb AnyKernel3/ || true
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            ZIP_OUT="${ZIP_NAME}-${GITHUB_REF_NAME}.zip"
+          else
+            ZIP_OUT="${ZIP_NAME}-${GITHUB_RUN_NUMBER}.zip"
+          fi
+          cd AnyKernel3
+          zip -r "${GITHUB_WORKSPACE}/${ZIP_OUT}" ./*
+
+      - name: Upload AnyKernel3 package
         uses: actions/upload-artifact@v4
         with:
-          name: ksu-dummy-module
-          path: ci/ksu_dummy_module
+          name: anykernel3-zip
+          path: "${{ env.ZIP_NAME }}-*.zip"
 
-  build-gki-module:
-    needs: prepare-module
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 8192
-          temp-reserve-mb: 2048
-          remove-dotnet: "true"
-          remove-android: "true"
-
-      - name: Build with Android kernel build action
-        uses: feicong/android-kernel-build-action@main
-        with:
-          arch: ${{ github.event.inputs.arch || 'aarch64' }}
-          tag: ${{ github.event.inputs.tag || 'android13-5.15' }}
-          module-name: ksu_dummy
-          module-path: ksu-dummy-module
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: output
-
-      - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/') || env.RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: output/**
+          files: "${{ env.ZIP_NAME }}-*.zip"
