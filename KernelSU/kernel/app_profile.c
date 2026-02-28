@@ -188,11 +188,6 @@ static int __manual_su_handle_devpts(struct inode *inode)
 	return 0;
 }
 
-int ksu_handle_devpts(struct inode *inode)
-{
-	return __manual_su_handle_devpts(inode);
-}
-
     uid_t uid = current_uid().val;
     if (uid % 100000 < 10000) {
         // not untrusted_app, ignore it
@@ -213,6 +208,11 @@ int ksu_handle_devpts(struct inode *inode)
         sec->sid = ksu_file_sid;
 
     return 0;
+}
+
+int ksu_handle_devpts(struct inode *inode)
+{
+	return __manual_su_handle_devpts(inode);
 }
 
 static void disable_seccomp_for_task(struct task_struct *tsk)
