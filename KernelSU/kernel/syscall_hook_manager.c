@@ -241,8 +241,10 @@ static inline bool check_syscall_fastpath(int nr)
     case __NR_execve:
     case __NR_setresuid:
     case __NR_clone:
+#ifdef __NR_clone3
     case __NR_clone3:
         return true;
+#endif
     default:
         return false;
     }
@@ -263,9 +265,9 @@ int ksu_handle_init_mark_tracker(const char __user **filename_user)
     fn = (const char __user *)addr;
 
     memset(path, 0, sizeof(path));
-    ret = strncpy_from_user_nofault(path, fn, sizeof(path));
+    ret = strncpy_from_user(path, fn, sizeof(path));
     if (ret < 0 && try_set_access_flag(addr)) {
-        ret = strncpy_from_user_nofault(path, fn, sizeof(path));
+        ret = strncpy_from_user(path, fn, sizeof(path));
         pr_info("ksu_handle_init_mark_tracker: %ld\n", ret);
     }
 
@@ -339,8 +341,12 @@ static void ksu_sys_enter_handler(void *data, struct pt_regs *regs, long id)
 
 #ifdef CONFIG_KSU_MANUAL_SU
         // Handle task_alloc via clone/fork
-        if (id == __NR_clone || id == __NR_clone3)
+        if (id == __NR_clone)
             return ksu_handle_task_alloc(regs);
+#ifdef __NR_clone3
+        if (id == __NR_clone3)
+            return ksu_handle_task_alloc(regs);
+#endif
 #endif
     }
 }
